@@ -1,6 +1,45 @@
 S-Type
 ------
 
+## Usage
+```javascript
+var Type = require('s-type');
+
+// These all default to true.
+//Type.changesFeed = false;
+//Type.typeCheck = false;
+//Type.setters = false;
+
+var test = Type('foo', {
+	first: String,
+	last: Number
+})
+
+var bar = new test('jaye', 1);
+console.log(bar instanceof Type); // true
+console.log(bar instanceof test); // true
+console.log(bar instanceof Object); // false
+
+var test2 = Type('bar', {
+	one: Number
+}, test)
+
+var foo = new test2(10);
+
+foo.changes.each(function(key){
+	console.log(key)
+})
+
+foo.one = 100;
+// 'one'
+
+console.log(foo instanceof Type); // true
+console.log(foo instanceof test); // true
+console.log(foo instanceof test2); // true
+console.log(foo instanceof Object); //false
+```
+
+## Why?
 `10,000,000 property changes`
 ```
 [deoptimize context: 11fca74414b1]
