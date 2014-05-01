@@ -26,12 +26,12 @@ var test2 = Type('bar', {
 
 var foo = new test2(10);
 
-foo.changes.each(function(key){
-	console.log(key)
+foo.changes.map(function(key){return key.length}).each(function(len){
+	console.log(len)
 })
 
 foo.one = 100;
-// 'one'
+// '3'
 
 console.log(foo instanceof Type); // true
 console.log(foo instanceof test); // true
