@@ -1,22 +1,25 @@
-var _ = require('lazy.js');
+"use strict";
+function noop(){}
+function True(){return true}
 
-
-function noop(){};
-
-var Sequence = _.createWrapper(noop);
-
-function ident(x) { return x }
+function ident(x) {return x}
 
 // specialize type checks per property type to use fast property lookup
 function specializedCheck (key, typ) {
+	if (typ === Primitive) {
+		return "(typeof val === 'string' || typeof val === 'number')"
+	}
+	if (typ === Any) {
+		return '(true)'
+	}
 	if (typ === String) {
-		return new Function('val', 'return typeof val === "string"')
+		return '(typeof val === "string")'
 	}
 	if (typ === Number) {
-		return new Function('val', 'return typeof val === "number"')
+		return '(typeof val === "number")'
 	}
-	return new Function('val', 'var typ = this.__types['+key+'];'
-	+ 'return (typ.hasInstance ? typ.hasInstance(val) : val instanceof typ)')
+	var typ = 'this.__types['+key+']';
+	return '('+typ+'.hasInstance ? '+typ+'.hasInstance(val) : val instanceof '+typ+')'
 }
 
 // again, specialize per type to reduce slow property lookups
@@ -29,10 +32,21 @@ function specializedToJSON (name, names) {
 }
 
 // specialize property setup
-function specializedConstructor (names) {
-	return names.map(function(name, i){
-		return 'this.'+name+' = '+name
-	}).join('\n')
+function specializedConstructor (names, debug) {
+	var str = ''
+	if (debug) {
+		str += names.map(function(name, i){
+			return 'Object.defineProperty(this, "_'+name+'", {enumerable: false, value: '+name+', writable: true})'
+		}).join('\n') + '\n'
+		str += names.map(function(name, i){
+			return 'Object.defineProperty(this, "'+name+'", Object.getOwnPropertyDescriptor(Object.getPrototypeOf(this), "'+name+'"))'
+		}).join('\n') + '\n'
+	} else {
+		str += names.map(function(name, i){
+			return 'this.'+name+' = '+name
+		}).join('\n');
+	}
+	return str
 }
 
 // creates an array from a object
@@ -42,58 +56,69 @@ function specializedUnapply (names) {
 	)
 }
 
-// Create a type
-function Type (name, desc, parent) {
+var prototype = Object.create(null, {value:{_type: 'Type'}});
+var Any = {};
+var Types = {};
+var Primitive = {}
+function Type (name, desc, parent, debug) {
+	var names, typs;
 	// stuff in here can be slow, it's only run once
 	if (desc instanceof Array) {
-		var names = desc.map(function(val, i){return i.toString()});
-		var typs = desc;
+		names = desc.map(function(val, i){return i.toString()});
 	} else {
-		var names = Object.keys(desc);
-		var typs = names.map(function(name){return desc[name]});
+		names = Object.keys(desc);
 	}
 
 	var constructor = Function.apply(null, names.concat([
-			  (Type.changesFeed ? 'this.changes = this.__createSequence();' : '')
-			+ specializedConstructor(names)
-			//+ ';Object.seal(this)' -- current v8 bug makes this cause a DEOPT/bailout
-			+ ';return this'
+			specializedConstructor(names, debug)
+			+ (debug ? ';Object.seal(this);' : '')
+			+ ';return this;'
 		]))
 	
+	constructor.__typeName = name;
+
+	Types[name] = constructor;
+
+	typs = names.map(function(name){
+		return desc[name]
+	});
+
+	// one shot deferred type resolution
+	typs.forEach(function(typ, i){
+		if (typeof typ === 'string') {
+			Object.defineProperty(typs, i, {
+				get: function(){
+					var val = Types[names[i]];
+					this[i] = val;
+					return val;
+				}
+			})
+		}
+	})
+
 	// all instances inherit from Type
 	var proto = Object.create(
-			(typeof parent !== 'undefined' ? parent.prototype : Type.prototype), {
-		__createSequence: {value: Sequence},
+			(typeof parent !== 'undefined' ? parent.prototype : prototype), {
 		toJSON: {value: specializedToJSON(name, names)},
-		__types: {value: typs},
-		__typeChecks: {value: names.map(function(name, i){
-			return specializedCheck(i, typs[i])
-		})}
+		__types: (debug ? {value: typs} : {value: undefined})
 	})
 
 	var name;
 	// create the getters/setters, these need to be fast, they
 	// are executed on every property lookup
-	for (var i = 0; i < names.length; i++) {
-		name = names[i];
-		if (Type.setters) {
+	if (debug) {
+		for (var i = 0; i < names.length; i++) {
+			name = names[i];
 			Object.defineProperty(proto, name, {
+				enumerable: true,
 				get: new Function('return this._'+name),
 				set: new Function('val',
-					(Type.typeCheck ?
-					 'if (!this.__typeChecks['+i+'](val)) throw new TypeError();' : '')
+					(debug ?
+					 'if (!'+specializedCheck(i, typs[i])+') throw new TypeError();' : '')
 					+ 'this._'+name+' = val;'
-					+ (Type.changesFeed ? 'this.changes.emit("'+name+'")' : '')
 				)
 			})
-		} else {
-			proto['set_'+name] = new Function('val',
-				(Type.typeCheck ?
-				 'if (!this.__typeChecks['+i+'](val)) throw new TypeError();' : '')
-				+ 'this.'+name+' = val;'
-				+ (Type.changesFeed ? 'this.changes.emit("'+name+'")' : '')
-			)
-		}
+		} 
 	}
 
 	constructor.prototype = proto;
@@ -106,9 +131,6 @@ function Type (name, desc, parent) {
 	return constructor
 }
 
-Type.prototype = Object.create(null, {value:{_type: 'Type'}});
-Type.changesFeed = true;
-Type.typeCheck = true;
-Type.setters = true;
-
+Type.prototype = prototype;
+	
 module.exports = Type
